@@ -1,0 +1,9 @@
+[submodule "Reference/websocket4net"]
+	path = Reference/websocket4net
+	url = https://github.com/ayls/websocket4net.git
+[submodule ".\\Reference\\websocket4net"]
+	path = .\\Reference\\websocket4net
+	url = https://github.com/ayls/websocket4net.git
+[submodule "Reference/socket.clientengine"]
+	path = Reference/socket.clientengine
+	url = https://github.com/ayls/supersocket.clientengine.git
