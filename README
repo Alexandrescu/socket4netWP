@@ -1,0 +1,7 @@
+To run the server install node js and socket.io etc. after which you need to run node main.js.
+
+Now you will have a server listening on 1337 (you might need to change ip addresses).
+
+In the WP application you have a fully functional socket.io interface for net 4.5 (WP 8.0 and 8.1).
+
+See the test app to understand how to invoke methods. The Connect method uses a semaphore. (change it if necesarily)
