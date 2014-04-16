@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using SocketIOClient.Eventing;
 using SocketIOClient.Messages;
 using WebSocket4Net;
+using System.Net.Http;
 
 namespace SocketIOClient
 {
@@ -24,7 +25,6 @@ namespace SocketIOClient
 		private BlockingCollection<string> outboundQueue;
 		private int retryConnectionCount = 0;
 		private int retryConnectionAttempts = 3;
-		private readonly static object padLock = new object(); // allow one connection attempt at a time
 
 		/// <summary>
 		/// Uri of Websocket server
@@ -118,16 +118,16 @@ namespace SocketIOClient
 		// Constructors
 		public Client(string url)
 			: this(url, WebSocketVersion.Rfc6455)
-		{
-		}
+		{ 
+        }
 		public Client(string url, NameValueCollection headers)
 			: this(url, WebSocketVersion.Rfc6455, headers)
 		{
-		}
+        }
 		public Client(string url, WebSocketVersion socketVersion)
 			: this(url, WebSocketVersion.Rfc6455, null)
 		{
-		}
+        }
 		public Client(string url, WebSocketVersion socketVersion, NameValueCollection headers)
 		{
 			this.uri = new Uri(url);
@@ -142,40 +142,43 @@ namespace SocketIOClient
 		/// <summary>
 		/// Initiate the connection with Socket.IO service
 		/// </summary>
-		public void Connect()
+        /// 
+
+        public static Semaphore padLock = new Semaphore(1, 1);
+		public async void Connect()
 		{
-			lock (padLock)
-			{
-				if (!(this.ReadyState == WebSocketState.Connecting || this.ReadyState == WebSocketState.Open))
-				{
-					try
-					{
-						this.ConnectionOpenEvent.Reset();
-						this.requestHandshake(uri);// perform an initial HTTP request as a new, non-handshaken connection
+            padLock.WaitOne();
+            if (!(this.ReadyState == WebSocketState.Connecting || this.ReadyState == WebSocketState.Open))
+            {
+                try
+                {
+                    this.ConnectionOpenEvent.Reset();
+                    Task theHandshake = this.requestHandshake(uri);// perform an initial HTTP request as a new, non-handshaken 
+                    await theHandshake;
 
-						if (string.IsNullOrWhiteSpace(this.HandShake.SID) || this.HandShake.HadError)
-						{
-							this.LastErrorMessage = string.Format("Error initializing handshake with {0}", uri.ToString());
-							this.OnErrorEvent(this, new ErrorEventArgs(this.LastErrorMessage, new Exception()));
-						}
-						else
-						{
-							string wsScheme = (uri.Scheme == Uri.UriSchemeHttps ? "wss" : "ws");
-							string host = uri.Host.Contains("localhost") || uri.Host.Contains("127.0.0.1") ? IPAddress.Loopback.ToString() : uri.Host;
-							this.wsClient = new WebSocket(
-								string.Format("{0}://{1}:{2}/socket.io/1/websocket/{3}", wsScheme, host, uri.Port, this.HandShake.SID),
-								string.Empty,
-								this.socketVersion);
-							this.wsClient.EnableAutoSendPing = false; // #4 tkiley: Websocket4net client library initiates a websocket heartbeat, causes delivery problems
-							this.wsClient.Opened += this.wsClient_OpenEvent;
-							this.wsClient.MessageReceived += this.wsClient_MessageReceived;
-							this.wsClient.Error += this.wsClient_Error;
+                    if (string.IsNullOrWhiteSpace(this.HandShake.SID) || this.HandShake.HadError)
+                    {
+                        this.LastErrorMessage = string.Format("Error initializing handshake with {0}", uri.ToString());
+                        this.OnErrorEvent(this, new ErrorEventArgs(this.LastErrorMessage, new Exception()));
+                    }
+                    else
+                    {
+                        string wsScheme = (uri.Scheme == Uri.UriSchemeHttps ? "wss" : "ws");
+                        string host = uri.Host.Contains("localhost") || uri.Host.Contains("127.0.0.1") ? IPAddress.Loopback.ToString() : uri.Host;
+                        this.wsClient = new WebSocket(
+                            string.Format("{0}://{1}:{2}/socket.io/1/websocket/{3}", wsScheme, host, uri.Port, this.HandShake.SID),
+                            string.Empty,
+                            this.socketVersion);
+                        this.wsClient.EnableAutoSendPing = false; // #4 tkiley: Websocket4net client library initiates a websocket heartbeat, causes delivery problems
+                        this.wsClient.Opened += this.wsClient_OpenEvent;
+                        this.wsClient.MessageReceived += this.wsClient_MessageReceived;
+                        this.wsClient.Error += this.wsClient_Error;
 
-							this.wsClient.Closed += wsClient_Closed;
+                        this.wsClient.Closed += wsClient_Closed;
 
-							this.wsClient.Open();
-						}
-					}
+                        this.wsClient.Open();
+                    }
+				}
 					
 					catch (Exception ex)
 					{
@@ -183,7 +186,8 @@ namespace SocketIOClient
 						this.OnErrorEvent(this, new ErrorEventArgs("SocketIO.Client.Connect threw an exception", ex));
 					}
 				}
-			}
+            padLock.Release();
+			
 		}
 		public IEndPointClient Connect(string endPoint)
 		{
@@ -428,7 +432,7 @@ namespace SocketIOClient
 		/// <param name="e"></param>
 		private void wsClient_MessageReceived(object sender, MessageReceivedEventArgs e)
 		{
-			
+            Debug.WriteLine("Message received invoked");
 
 			IMessage iMsg = SocketIOClient.Messages.Message.Factory(e.Message);
 
@@ -590,48 +594,33 @@ namespace SocketIOClient
 		/// <param name="uri">http://localhost:3000</param>
 		/// <returns>Handshake object with sid value</returns>
 		/// <example>DownloadString: 13052140081337757257:15:25:websocket,htmlfile,xhr-polling,jsonp-polling</example>
-		protected void requestHandshake(Uri uri)
+
+    
+
+		protected async Task requestHandshake(Uri uri)
 		{
 			string value = string.Empty;
 			string errorText = string.Empty;
 
-		    WebClient client = new WebClient();
+            HttpClient client = new HttpClient();
             try 
 			{
 				try
 				{
 				    if (this.HandShake.Headers.Count > 0)
 				    {
-#if WINDOWS_PHONE
 				        foreach (var header in this.HandShake.Headers)
 				        {
-				            client.Headers[header.Key] = header.Value;
+                            client.DefaultRequestHeaders.Add(header.Key, header.Value);
 				        }
-#else
-				        client.Headers.Add(this.HandShake.Headers);
-#endif
+
 				    }
 
-#if WINDOWS_PHONE
-				    var signal = new ManualResetEvent(false);
-                    client.DownloadStringCompleted += (sender, e) =>
-                        {
-                            value = e.Result;
-                            signal.Set();
-                        };
-                    client.DownloadStringAsync(new Uri(string.Format("{0}://{1}:{2}/socket.io/1/{3}", uri.Scheme, uri.Host, uri.Port,
-                                        uri.Query)));
+                    Uri socketUri = new Uri(string.Format("{0}://{1}:{2}/socket.io/1/{3}", uri.Scheme, uri.Host, uri.Port, uri.Query));
 
-				    signal.WaitOne();
-#else
-				    value =
-				        client.DownloadString(string.Format("{0}://{1}:{2}/socket.io/1/{3}", uri.Scheme, uri.Host, uri.Port,
-				                                            uri.Query));
-                    // #5 tkiley: The uri.Query is available in socket.io's handshakeData object during authorization
-				    // 13052140081337757257:15:25:websocket,htmlfile,xhr-polling,jsonp-polling
-				    if (string.IsNullOrEmpty(value))
-				        errorText = "Did not receive handshake from server";
-#endif
+                    Task<string> theFetch = client.GetStringAsync(socketUri);
+                    
+                    value = await theFetch;
 				}
 				catch (WebException webEx)
 				{
@@ -674,9 +663,6 @@ namespace SocketIOClient
 			}
             finally
             {
-#if !WINDOWS_PHONE
-				    client.Dispose();
-#endif
             }
 			if (string.IsNullOrEmpty(errorText))
 				this.HandShake.UpdateFromSocketIOResponse(value);
